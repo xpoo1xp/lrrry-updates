@@ -1,0 +1,25 @@
+﻿diff --git a/src/server/game/Maps/MapUpdater.cpp b/src/server/game/Maps/MapUpdater.cpp
+index d2ad9e670..b3efc8e79 100644
+--- a/src/server/game/Maps/MapUpdater.cpp
++++ b/src/server/game/Maps/MapUpdater.cpp
+@@ -181,9 +181,18 @@ void MapUpdater::WorkerThread()
+ 
+         _queue.WaitAndPop(request);  // Wait for and pop a request from the queue
+ 
+-        if (!_cancelationToken && request)
++        if (request)
+         {
+-            request->call();  // Execute the request
++            if (!_cancelationToken)
++            {
++                request->call();  // Execute the request (settles pending_requests internally)
++            }
++            else
++            {
++                // The request was popped while shutting down: it will never run, so settle it
++                // here or MapUpdater::wait() blocks forever on the leaked pending_requests.
++                update_finished();
++            }
+             delete request;  // Clean up after processing
+         }
+     }

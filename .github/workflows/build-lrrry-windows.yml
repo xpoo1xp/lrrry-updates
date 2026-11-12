@@ -1,0 +1,326 @@
+##############################################################################
+# lrrry 自用版云编译（Windows）—— core + CoA Bots + 三个额外模块
+#
+# 放在自己 fork 仓库的 .github/workflows/build-lrrry-windows.yml，
+# Actions → Build lrrry (Windows) → Run workflow。
+#
+# 产物 lrrry-core-windows-rNN.zip：
+#   authserver.exe / worldserver.exe / 运行时 DLL / configs（模块 .conf.dist）/ BUILD_INFO.txt
+# 下载后交给 tools\lrrry-cloud.mjs 里的 pack 子命令做成更新包。
+##############################################################################
+name: Build lrrry (Windows)
+
+on:
+  workflow_dispatch:
+    inputs:
+      core_repo:
+        description: '核心仓库 owner/repo（留空 = Conquest-of-AzerothCore/azerothcore-wotlk-coa）'
+        required: false
+        default: ''
+      core_ref:
+        description: '核心分支/标签/commit（留空 = main）'
+        required: false
+        default: ''
+      module_ref:
+        description: 'mod-playerbots 分支（留空 = coa）'
+        required: false
+        default: ''
+      build_type:
+        description: '构建类型'
+        type: choice
+        options:
+          - 'RelWithDebInfo'
+          - 'Release'
+        default: 'RelWithDebInfo'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 355
+    env:
+      BOOST_ROOT: C:\local\boost_1_87_0
+      CMAKE_GENERATOR: Ninja
+      MYSQL_VERSION: 8.4.13
+      OPENSSL_VERSION: 3.6.5
+    steps:
+      - name: 拉取核心源码
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.core_repo || 'Conquest-of-AzerothCore/azerothcore-wotlk-coa' }}
+          ref: ${{ inputs.core_ref || 'main' }}
+          path: a
+          fetch-depth: 0
+
+      - name: 拉取 mod-playerbots
+        uses: actions/checkout@v4
+        with:
+          repository: Zyth45/mod-playerbots
+          ref: ${{ inputs.module_ref || 'coa' }}
+          path: a/modules/mod-playerbots
+          fetch-depth: 1
+
+      - name: 拉取 mod-ah-bot-plus
+        uses: actions/checkout@v4
+        with:
+          repository: NathanHandley/mod-ah-bot-plus
+          ref: master
+          path: a/modules/mod-ah-bot-plus
+          fetch-depth: 1
+
+      - name: 拉取 mod-dungeon-clear
+        uses: actions/checkout@v4
+        with:
+          repository: Zyth45/mod-dungeon-clear
+          ref: coa
+          path: a/modules/mod-dungeon-clear
+          fetch-depth: 1
+
+      - name: 拉取 mod-npc-enchanter
+        uses: actions/checkout@v4
+        with:
+          repository: azerothcore/mod-npc-enchanter
+          ref: master
+          path: a/modules/mod-npc-enchanter
+          fetch-depth: 1
+
+      - name: 取回构建补丁
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          path: meta
+          fetch-depth: 1
+          sparse-checkout: ci
+
+      - name: 应用构建补丁
+        shell: bash
+        working-directory: a
+        run: |
+          shopt -s nullglob
+          applied=0
+          for patch in "$GITHUB_WORKSPACE"/meta/ci/patches/*.patch; do
+            name=$(basename "$patch")
+            if git apply --check "$patch" 2>/dev/null; then
+              git apply "$patch"
+              echo "applied: $name"
+              applied=$((applied + 1))
+            else
+              echo "skip (already applied or not applicable): $name"
+            fi
+          done
+          echo "手动补丁应用数量: $applied"
+
+      - name: 移动到短路径 C:\ac
+        shell: pwsh
+        run: |
+          if (Test-Path C:\ac) { Remove-Item C:\ac -Recurse -Force }
+          New-Item -ItemType Directory -Path C:\ac | Out-Null
+          robocopy "${{ github.workspace }}\a" "C:\ac" /MIR /NFL /NDL /NJH /NJS /NP
+          if ($LASTEXITCODE -le 7) { exit 0 }
+          exit $LASTEXITCODE
+
+      - name: 记录版本
+        shell: bash
+        run: |
+          CORE_COMMIT=$(git -C /c/ac rev-parse HEAD)
+          CORE_DATE=$(git -C /c/ac log -1 --format=%cd --date=format:%Y%m%d)
+          MOD_COMMIT=$(git -C /c/ac/modules/mod-playerbots rev-parse HEAD)
+          {
+            echo "### 本次编译"
+            echo ""
+            echo "| 来源 | commit |"
+            echo "|---|---|"
+            echo "| core | \`$CORE_COMMIT\` |"
+            echo "| mod-playerbots | \`$MOD_COMMIT\` |"
+            echo ""
+            echo "- releaseId：\`main-$CORE_DATE-${CORE_COMMIT:0:8}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "CORE_COMMIT=$CORE_COMMIT" >> "$GITHUB_ENV"
+          echo "CORE_DATE=$CORE_DATE" >> "$GITHUB_ENV"
+          echo "MOD_COMMIT=$MOD_COMMIT" >> "$GITHUB_ENV"
+          echo "RELEASE_ID=main-$CORE_DATE-${CORE_COMMIT:0:8}" >> "$GITHUB_ENV"
+
+      - name: 缓存 Boost
+        uses: actions/cache@v4
+        with:
+          path: C:\local\boost_1_87_0
+          key: win-deps-boost-1.87.0
+
+      - name: 缓存 MySQL 客户端
+        uses: actions/cache@v4
+        with:
+          path: C:\tools\mysql\current
+          key: win-deps-mysql-8.4.13-v1
+
+      - name: 缓存 Win64 OpenSSL
+        uses: actions/cache@v4
+        with:
+          path: C:\openssl
+          key: win-deps-openssl-3.6.5
+
+      - name: 安装 Ninja 与 Boost 1.87
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          choco install ninja -y --no-progress
+          if (Test-Path 'C:\local\boost_1_87_0\boost\version.hpp') { exit 0 }
+          $exe = Join-Path $env:RUNNER_TEMP 'boost.exe'
+          Invoke-WebRequest -Uri 'https://downloads.sourceforge.net/project/boost/boost-binaries/1.87.0/boost_1_87_0-msvc-14.3-64.exe' `
+            -OutFile $exe -UserAgent 'lrrry-ci' -MaximumRetryCount 3 -RetryIntervalSec 15
+          Start-Process -FilePath $exe -Wait -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/DIR=C:\local\boost_1_87_0')
+          if (-not (Test-Path 'C:\local\boost_1_87_0\boost\version.hpp')) { throw 'Boost 安装失败' }
+
+      - name: 安装 MySQL 8.4.13 客户端库
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ver = $env:MYSQL_VERSION
+          $cur = 'C:\tools\mysql\current'
+          if (-not (Test-Path "$cur\lib\mysqlclient.lib")) {
+            $url = "https://cdn.mysql.com/Downloads/MySQL-8.4/mysql-$ver-winx64.zip"
+            $zip = Join-Path $env:RUNNER_TEMP 'mysql.zip'
+            Invoke-WebRequest -Uri $url -OutFile $zip -UserAgent 'Mozilla/5.0' -MaximumRetryCount 3 -RetryIntervalSec 10
+            if ((Get-Item $zip).Length -lt 50MB) { throw 'MySQL 包体积异常' }
+            New-Item -ItemType Directory -Force -Path 'C:\tools\mysql' | Out-Null
+            Expand-Archive -Path $zip -DestinationPath 'C:\tools\mysql' -Force
+            $dir = Get-ChildItem 'C:\tools\mysql' -Directory -Filter "mysql-$ver-*" | Select-Object -First 1
+            if (-not $dir) { throw "解压后没找到 mysql-$ver-winx64" }
+            Rename-Item $dir.FullName $cur
+          }
+          $vh = "$cur\include\mysql_version.h"
+          $idLine = Select-String -Path $vh -Pattern '^#define\s+MYSQL_VERSION_ID\s+(\d+)' | Select-Object -First 1
+          if (-not $idLine) { throw '无法判定 MySQL 版本' }
+          $id = [int]$idLine.Matches[0].Groups[1].Value
+          $actual = '{0}.{1}.{2}' -f ([math]::Floor($id / 10000)), ([math]::Floor(($id % 10000) / 100)), ($id % 100)
+          if ($actual -ne $ver) { throw "MySQL 实际 $actual，不是 $ver" }
+
+      - name: 安装 Win64 OpenSSL 3.6.5
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = 'C:\openssl'
+          $ver = $env:OPENSSL_VERSION
+          $verU = $ver.Replace('.', '_')
+          if (-not (Test-Path "$root\include\openssl\ssl.h")) {
+            if (Test-Path $root) { Remove-Item $root -Recurse -Force }
+            $msi = Join-Path $env:RUNNER_TEMP "openssl-$verU.msi"
+            Invoke-WebRequest -Uri "https://slproweb.com/download/Win64OpenSSL-$verU.msi" -OutFile $msi -UserAgent 'Mozilla/5.0' -MaximumRetryCount 3 -RetryIntervalSec 10
+            if ((Get-Item $msi).Length -lt 10MB) { throw 'OpenSSL MSI 体积异常' }
+            $p = Start-Process -FilePath 'msiexec.exe' -Wait -PassThru -ArgumentList @('/i', $msi, '/quiet', '/qn', '/norestart', 'REBOOT=ReallySuppress', "INSTALLDIR=$root")
+            if ($p.ExitCode -ne 0) { throw "msiexec 失败: $($p.ExitCode)" }
+          }
+          "OPENSSL_ROOT_DIR=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: 启用 MSVC 环境
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        with:
+          arch: x64
+
+      - name: CMake 配置
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path C:\ac\var\build | Out-Null
+          cmake -S C:\ac -B C:\ac\var\build -G Ninja `
+            -DCMAKE_BUILD_TYPE=${{ inputs.build_type }} `
+            -DCMAKE_INSTALL_PREFIX=C:/ac/env/dist `
+            -DSCRIPTS=static -DMODULES=static -DAPPS_BUILD=all -DTOOLS_BUILD=none `
+            -DBUILD_TESTING=OFF -DWITH_WARNINGS=OFF `
+            -DBOOST_ROOT=C:/local/boost_1_87_0 -DBoost_ROOT=C:/local/boost_1_87_0 `
+            -DBoost_INCLUDE_DIR=C:/local/boost_1_87_0 -DBoost_LIBRARY_DIR=C:/local/boost_1_87_0/stage/lib `
+            -DBoost_NO_BOOST_CMAKE=ON -DBoost_COMPILER=-vc143 `
+            -DOPENSSL_ROOT_DIR=C:/openssl -DOPENSSL_USE_STATIC_LIBS=FALSE `
+            -DMYSQL_INCLUDE_DIR=C:/tools/mysql/current/include -DMYSQL_LIBRARY=C:/tools/mysql/current/lib/libmysql.lib `
+            -DCMAKE_RC_COMPILER=rc -DCMAKE_NINJA_FORCE_RESPONSE_FILE=ON -DCMAKE_NINJA_CMCLDEPS_RC=OFF
+          if ($LASTEXITCODE -ne 0) { throw 'CMake 配置失败' }
+
+      - name: 编译并安装
+        shell: pwsh
+        run: |
+          cmake --build C:\ac\var\build --target install -j 8 2>&1 | Tee-Object -FilePath C:\ac\build.log
+          if ($LASTEXITCODE -ne 0) {
+            Select-String -Path C:\ac\build.log -Pattern 'error C|error LNK|fatal error|FAILED:' | Select-Object -Last 30 | ForEach-Object { $_.Line }
+            throw "编译失败（exit $LASTEXITCODE）"
+          }
+
+      - name: 补齐运行时 DLL
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dist = 'C:\ac\env\dist'
+          if (-not (Test-Path "$dist\worldserver.exe")) { throw 'env/dist 没有 worldserver.exe' }
+          $cand = [ordered]@{
+            'libmysql.dll'        = @('C:\tools\mysql\current\lib', 'C:\tools\mysql\current\bin')
+            'libcrypto-3-x64.dll' = @('C:\openssl\bin')
+            'libssl-3-x64.dll'    = @('C:\openssl\bin')
+            'legacy.dll'          = @('C:\openssl\bin')
+            'vcruntime140.dll'    = @('C:\Windows\System32')
+            'vcruntime140_1.dll'  = @('C:\Windows\System32')
+            'msvcp140.dll'        = @('C:\Windows\System32')
+            'msvcp140_1.dll'      = @('C:\Windows\System32')
+            'msvcp140_2.dll'      = @('C:\Windows\System32')
+            'concrt140.dll'       = @('C:\Windows\System32')
+            'vccorlib140.dll'     = @('C:\Windows\System32')
+          }
+          foreach ($n in $cand.Keys) {
+            if (Test-Path (Join-Path $dist $n)) { continue }
+            $src = @($cand[$n]) | Where-Object { Test-Path (Join-Path $_ $n) } | Select-Object -First 1
+            if ($src) { Copy-Item (Join-Path $src $n) $dist -Force } else { Write-Warning "缺 $n" }
+          }
+          $dll = Join-Path $dist 'libmysql.dll'
+          if (-not (Test-Path $dll)) { throw 'env/dist 没有 libmysql.dll' }
+          $fv = (Get-Item $dll).VersionInfo.FileVersion
+          if ($fv -notlike "$env:MYSQL_VERSION*") { throw "libmysql.dll 是 $fv，与 $env:MYSQL_VERSION 不一致（ACE00046）" }
+
+      - name: 写入 BUILD_INFO.txt
+        shell: pwsh
+        run: |
+          $lines = @(
+            'lrrry-coa-Repack 云编译',
+            '======================='
+            "release_id    = $env:RELEASE_ID"
+            "built_at      = $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz')"
+            ''
+            'core_repo     = https://github.com/Conquest-of-AzerothCore/azerothcore-wotlk-coa'
+            "core_commit   = $env:CORE_COMMIT"
+            "module_commit = $env:MOD_COMMIT"
+            'modules       = mod-playerbots, mod-ah-bot-plus, mod-dungeon-clear, mod-npc-enchanter + 30 个主仓模块'
+            ''
+            'build_type    = ${{ inputs.build_type }}'
+            'mysql_client  = 8.4.13'
+            'openssl       = 3.6.5'
+            'boost         = 1.87.0'
+          )
+          $lines | Out-File -FilePath 'C:\ac\env\dist\BUILD_INFO.txt' -Encoding utf8
+
+      - name: 打包产物
+        shell: pwsh
+        run: |
+          $pkg = 'C:\ac\pkg'
+          if (Test-Path $pkg) { Remove-Item $pkg -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path $pkg | Out-Null
+          Copy-Item 'C:\ac\env\dist\*' $pkg -Recurse -Force
+          Remove-Item (Join-Path $pkg 'Logs') -Recurse -Force -ErrorAction SilentlyContinue
+          $files = @(Get-ChildItem $pkg -File | Sort-Object Name)
+          ($files | ForEach-Object { '{0}  {1}' -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name }) |
+            Out-File -FilePath (Join-Path $pkg 'SHA256SUMS.txt') -Encoding utf8
+          "release_id=$env:RELEASE_ID" | Out-File -FilePath (Join-Path $pkg 'RELEASE_ID.txt') -Encoding ascii
+
+      - name: 上传产物
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: lrrry-core-windows-r${{ github.run_number }}
+          path: C:\ac\pkg
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 1
+          overwrite: true
+
+      - name: 记录下载信息
+        shell: pwsh
+        run: |
+          "### 产物" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "releaseId = ``$env:RELEASE_ID``" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "下载: ${{ steps.upload.outputs.artifact-url }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
