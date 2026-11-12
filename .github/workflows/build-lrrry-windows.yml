@@ -34,7 +34,8 @@ on:
         default: 'RelWithDebInfo'
 
 permissions:
-  contents: read
+  # By lrrry 2026-11-12: 要往 Releases 上传产物（登录器从 Release 读，公开仓库不用 token）
+  contents: write
 
 jobs:
   build:
@@ -432,9 +433,38 @@ jobs:
           compression-level: 1
           overwrite: true
 
+      - name: 打成发布用的 zip
+        shell: pwsh
+        run: |
+          # By lrrry 2026-11-12
+          # 登录器不读 artifact（下载要 token），只读 Release 里的这个 zip：
+          # 公开仓库的 release asset 可以直接下，配 gh-proxy 中转就能加速。
+          $zip = "C:\ac\lrrry-core-$env:RELEASE_ID.zip"
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+          Compress-Archive -Path 'C:\ac\pkg\*' -DestinationPath $zip -CompressionLevel Optimal
+          $mb = [math]::Round((Get-Item $zip).Length / 1MB, 1)
+          Write-Host "产物 zip: $zip ($mb MB)"
+          "ZIP_PATH=$zip" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: 发布到 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_ID }}
+          name: ${{ env.RELEASE_ID }}
+          body: |
+            云编译产物：core + CoA Bots + mod-ah-bot-plus / mod-dungeon-clear / mod-npc-enchanter + DevMenu
+
+            - release_id: ${{ env.RELEASE_ID }}
+            - core: ${{ env.CORE_COMMIT }}
+            - mod-playerbots: ${{ env.MOD_COMMIT }}
+          files: ${{ env.ZIP_PATH }}
+          fail_on_unmatched_files: true
+
       - name: 记录下载信息
         shell: pwsh
         run: |
           "### 产物" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           "releaseId = ``$env:RELEASE_ID``" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-          "下载: ${{ steps.upload.outputs.artifact-url }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "Release 页面: https://github.com/${{ github.repository }}/releases/tag/$env:RELEASE_ID" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "下载（直连）: https://github.com/${{ github.repository }}/releases/download/$env:RELEASE_ID/lrrry-core-$env:RELEASE_ID.zip" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "Artifact: ${{ steps.upload.outputs.artifact-url }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
