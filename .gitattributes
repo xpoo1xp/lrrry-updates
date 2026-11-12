@@ -1,0 +1,7 @@
+# By lrrry 2026-11-12
+# 补丁必须原样 checkout：Windows runner 的 core.autocrlf=true 会把 .patch 转成 CRLF，
+# git apply 就不认了（表现为「skip (already applied or not applicable)」）。
+*.patch -text
+
+# 其余文本统一 LF
+* text=auto eol=lf

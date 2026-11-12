@@ -100,10 +100,17 @@ jobs:
         run: |
           shopt -s nullglob
           applied=0
+          # By lrrry 2026-11-12
+          # 教训：Windows runner 上的 checkout 会把 .patch 转成 CRLF（仓库没有 .gitattributes 时
+          # core.autocrlf=true 生效），git apply 对 CRLF 的补丁一律「patch does not apply」，
+          # 于是两个补丁都被 skip，编译时找不到 AscensionCompanionLoot.h。
+          # 这里先统一转成 LF 再打；仓库里也加了 .gitattributes（*.patch -text）。
+          mkdir -p "$RUNNER_TEMP/patches"
           for patch in "$GITHUB_WORKSPACE"/meta/ci/patches/*.patch; do
             name=$(basename "$patch")
-            if git apply --check "$patch" 2>/dev/null; then
-              git apply "$patch"
+            sed 's/\r$//' "$patch" > "$RUNNER_TEMP/patches/$name"
+            if git apply --check "$RUNNER_TEMP/patches/$name" 2>/dev/null; then
+              git apply "$RUNNER_TEMP/patches/$name"
               echo "applied: $name"
               applied=$((applied + 1))
             else
@@ -111,6 +118,10 @@ jobs:
             fi
           done
           echo "手动补丁应用数量: $applied"
+          if [ "$applied" -eq 0 ]; then
+            echo "::warning::一个补丁都没打上，编译会因为缺 AscensionCompanionLoot.h 失败"
+          fi
+          # End By lrrry 2026-11-12
 
       - name: 移动到短路径 C:\ac
         shell: pwsh
