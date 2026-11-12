@@ -94,6 +94,24 @@ jobs:
           fetch-depth: 1
           sparse-checkout: ci
 
+      - name: 放入额外模块
+        shell: pwsh
+        run: |
+          # By lrrry 2026-11-12
+          # DevMenu（GM 菜单）服务端模块没有可靠的公开仓库可拉，源码直接放在本仓库 ci/modules 下，
+          # 编译前复制进 core 的 modules 目录；AzerothCore 会自动收录（ModulesLoader 里会出现
+          # Addmod_ilusixn_devmenuScripts）。
+          $src = Join-Path $env:GITHUB_WORKSPACE 'meta\ci\modules'
+          if (-not (Test-Path $src)) { Write-Host '本仓库没有 ci/modules，跳过'; exit 0 }
+          $dst = 'a\modules'
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+          Get-ChildItem $src -Directory | ForEach-Object {
+            $target = Join-Path $dst $_.Name
+            if (Test-Path $target) { Remove-Item $target -Recurse -Force }
+            Copy-Item $_.FullName $target -Recurse -Force
+            Write-Host "已放入模块：$($_.Name)"
+          }
+
       - name: 应用构建补丁
         shell: bash
         working-directory: a
@@ -309,6 +327,17 @@ jobs:
             -DCMAKE_RC_COMPILER=rc -DCMAKE_NINJA_FORCE_RESPONSE_FILE=ON -DCMAKE_NINJA_CMCLDEPS_RC=OFF
           if ($LASTEXITCODE -ne 0) { throw 'CMake 配置失败' }
 
+      - name: 校验 DevMenu 模块已收录
+        shell: pwsh
+        run: |
+          # 模块没进 modules 目录的话，这里立刻失败，不用等 90 分钟编译到链接阶段才发现
+          $loader = 'C:\ac\var\build\modules\gen_scriptloader\static\ModulesLoader.cpp'
+          if (-not (Test-Path $loader)) { throw "没找到 ModulesLoader.cpp：$loader" }
+          if (-not (Select-String -Path $loader -Pattern 'Addmod_ilusixn_devmenuScripts' -Quiet)) {
+            throw 'DevMenu 模块没有被收录：检查 ci/modules/mod-ilusixn-devmenu/src 是否存在、有没有 _loader.cpp'
+          }
+          Write-Host 'DevMenu 模块已收录（Addmod_ilusixn_devmenuScripts 在 ModulesLoader.cpp 里）'
+
       - name: 编译并安装
         shell: pwsh
         run: |
@@ -376,6 +405,17 @@ jobs:
           New-Item -ItemType Directory -Force -Path $pkg | Out-Null
           Copy-Item 'C:\ac\env\dist\*' $pkg -Recurse -Force
           Remove-Item (Join-Path $pkg 'Logs') -Recurse -Force -ErrorAction SilentlyContinue
+          # By lrrry 2026-11-12: DevMenu 客户端插件（lrrry 汉化版）一起打进产物，
+          # 落地后放在 CoA-Bots\Client\DevMenu，更新时由 coa_update.py 装到客户端 Interface\AddOns。
+          $addons = Join-Path $env:GITHUB_WORKSPACE 'meta\ci\addons'
+          if (Test-Path $addons) {
+            $clientRoot = Join-Path $pkg 'CoA-Bots\Client'
+            New-Item -ItemType Directory -Force -Path $clientRoot | Out-Null
+            Get-ChildItem $addons -Directory | ForEach-Object {
+              Copy-Item $_.FullName (Join-Path $clientRoot $_.Name) -Recurse -Force
+              Write-Host "已打入插件：$($_.Name)"
+            }
+          }
           $files = @(Get-ChildItem $pkg -File | Sort-Object Name)
           ($files | ForEach-Object { '{0}  {1}' -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name }) |
             Out-File -FilePath (Join-Path $pkg 'SHA256SUMS.txt') -Encoding utf8
