@@ -250,6 +250,8 @@ jobs:
               New-Item -ItemType Directory -Force -Path $root | Out-Null
               robocopy $preset $root /E /NFL /NDL /NJH /NJS /NP | Out-Null
               if ($LASTEXITCODE -ge 8) { throw "复制预装 OpenSSL 失败：$LASTEXITCODE" }
+              # robocopy 成功也返回 1，PowerShell 会把它当脚本退出码 → step 失败。必须清零。
+              $LASTEXITCODE = 0
             } else {
               $zip = Join-Path $env:RUNNER_TEMP "openssl-$ver.zip"
               $url = "https://download.firedaemon.com/FireDaemon-OpenSSL/openssl-$ver.zip"
@@ -265,6 +267,7 @@ jobs:
               New-Item -ItemType Directory -Force -Path $root | Out-Null
               robocopy $x64.FullName $root /E /NFL /NDL /NJH /NJS /NP | Out-Null
               if ($LASTEXITCODE -ge 8) { throw "解压 OpenSSL 失败：$LASTEXITCODE" }
+              $LASTEXITCODE = 0
             }
           }
           if (-not (Test-Path "$root\include\openssl\ssl.h")) { throw "OpenSSL 装好后仍找不到 $root\include\openssl\ssl.h" }
