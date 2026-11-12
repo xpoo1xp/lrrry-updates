@@ -146,7 +146,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: C:\local\boost_1_87_0
-          key: win-deps-boost-1.87.0
+          # By lrrry 2026-11-12: key 加 -v2。第一次跑时缓存里存的是「只有头文件」的空壳
+          # （runner 预装的 C:\local\boost_1_87_0 只有 boost/ 没有 lib64-msvc-14.3），
+          # 旧 key 一旦存在就不会更新，每次都会恢复空壳再重装 15 分钟。换 key 让它重新存。
+          key: win-deps-boost-1.87.0-lib64-v2
 
       - name: 缓存 MySQL 客户端
         uses: actions/cache@v4
@@ -172,8 +175,19 @@ jobs:
                      (Test-Path 'C:\local\boost_1_87_0\lib64-msvc-14.3')
           if ($boostOk) { exit 0 }
           $exe = Join-Path $env:RUNNER_TEMP 'boost.exe'
-          Invoke-WebRequest -Uri 'https://downloads.sourceforge.net/project/boost/boost-binaries/1.87.0/boost_1_87_0-msvc-14.3-64.exe' `
-            -OutFile $exe -UserAgent 'lrrry-ci' -MaximumRetryCount 3 -RetryIntervalSec 15
+          # By lrrry 2026-11-12: 先走官方 archives（比 sourceforge 稳、快），拿不到再退回 sourceforge
+          $urls = @(
+            'https://archives.boost.io/release/1.87.0/binaries/boost_1_87_0-msvc-14.3-64.exe',
+            'https://downloads.sourceforge.net/project/boost/boost-binaries/1.87.0/boost_1_87_0-msvc-14.3-64.exe'
+          )
+          $done = $false
+          foreach ($url in $urls) {
+            try {
+              Invoke-WebRequest -Uri $url -OutFile $exe -UserAgent 'lrrry-ci' -MaximumRetryCount 2 -RetryIntervalSec 10
+              if ((Get-Item $exe).Length -gt 100MB) { $done = $true; break }
+            } catch { Write-Warning "下载失败：$url（$($_.Exception.Message)）" }
+          }
+          if (-not $done) { throw 'Boost 安装包下载失败（archives 与 sourceforge 都试过了）' }
           Start-Process -FilePath $exe -Wait -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/DIR=C:\local\boost_1_87_0')
           if (-not (Test-Path 'C:\local\boost_1_87_0\boost\version.hpp')) { throw 'Boost 安装失败' }
 
