@@ -41,7 +41,7 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 355
     env:
-      BOOST_ROOT: C:\local\boost_1_87_0
+      # BOOST_ROOT 由「安装 Ninja 与 Boost」那步动态写入（复用 runner 上已有的版本）
       CMAKE_GENERATOR: Ninja
       MYSQL_VERSION: 8.4.13
       OPENSSL_VERSION: 3.6.5
@@ -163,33 +163,49 @@ jobs:
           path: C:\openssl
           key: win-deps-openssl-3.6.5
 
-      - name: 安装 Ninja 与 Boost 1.87
+      - name: 安装 Ninja 与 Boost
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           choco install ninja -y --no-progress
           # By lrrry 2026-11-12
-          # runner 上有时只有头文件、没有 lib64-msvc-*（CMake 会报 Could NOT find Boost:
-          # missing filesystem program_options iostreams regex）。所以连库目录一起验，缺就重装。
-          $boostOk = (Test-Path 'C:\local\boost_1_87_0\boost\version.hpp') -and
-                     (Test-Path 'C:\local\boost_1_87_0\lib64-msvc-14.3')
-          if ($boostOk) { exit 0 }
-          $exe = Join-Path $env:RUNNER_TEMP 'boost.exe'
-          # By lrrry 2026-11-12: 先走官方 archives（比 sourceforge 稳、快），拿不到再退回 sourceforge
-          $urls = @(
-            'https://archives.boost.io/release/1.87.0/binaries/boost_1_87_0-msvc-14.3-64.exe',
-            'https://downloads.sourceforge.net/project/boost/boost-binaries/1.87.0/boost_1_87_0-msvc-14.3-64.exe'
-          )
-          $done = $false
-          foreach ($url in $urls) {
-            try {
-              Invoke-WebRequest -Uri $url -OutFile $exe -UserAgent 'lrrry-ci' -MaximumRetryCount 2 -RetryIntervalSec 10
-              if ((Get-Item $exe).Length -gt 100MB) { $done = $true; break }
-            } catch { Write-Warning "下载失败：$url（$($_.Exception.Message)）" }
+          # 不再死磕 1.87：runner 的 C:\local 里往往已经躺着可用的 Boost（只是版本不同、布局是
+          # lib64-msvc-14.x）。ACE 只要求 >= 1.78，所以先扫一遍能用的（头文件 + 库目录都在），
+          # 直接用；一个都没有才下载安装。这样每轮能省掉 15~20 分钟。
+          $cand = Get-ChildItem 'C:\local' -Directory -Filter 'boost_1_*' -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending
+          $root = $null
+          $libDir = $null
+          foreach ($dir in $cand) {
+            if (-not (Test-Path (Join-Path $dir.FullName 'boost\version.hpp'))) { continue }
+            $lib = Get-ChildItem $dir.FullName -Directory -Filter 'lib64-msvc-*' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($lib) { $root = $dir.FullName; $libDir = $lib.FullName; break }
           }
-          if (-not $done) { throw 'Boost 安装包下载失败（archives 与 sourceforge 都试过了）' }
-          Start-Process -FilePath $exe -Wait -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/DIR=C:\local\boost_1_87_0')
-          if (-not (Test-Path 'C:\local\boost_1_87_0\boost\version.hpp')) { throw 'Boost 安装失败' }
+          if (-not $root) {
+            $exe = Join-Path $env:RUNNER_TEMP 'boost.exe'
+            $urls = @(
+              'https://archives.boost.io/release/1.87.0/binaries/boost_1_87_0-msvc-14.3-64.exe',
+              'https://downloads.sourceforge.net/project/boost/boost-binaries/1.87.0/boost_1_87_0-msvc-14.3-64.exe'
+            )
+            $done = $false
+            foreach ($url in $urls) {
+              try {
+                Invoke-WebRequest -Uri $url -OutFile $exe -UserAgent 'lrrry-ci' -MaximumRetryCount 2 -RetryIntervalSec 10
+                if ((Get-Item $exe).Length -gt 100MB) { $done = $true; break }
+              } catch { Write-Warning "下载失败：$url（$($_.Exception.Message)）" }
+            }
+            if (-not $done) { throw 'Boost 安装包下载失败（archives 与 sourceforge 都试过了）' }
+            Start-Process -FilePath $exe -Wait -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/DIR=C:\local\boost_1_87_0')
+            $root = 'C:\local\boost_1_87_0'
+            $lib = Get-ChildItem $root -Directory -Filter 'lib64-msvc-*' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not (Test-Path "$root\boost\version.hpp") -or -not $lib) { throw 'Boost 安装后仍不完整（头文件或 lib64-msvc 缺失）' }
+            $libDir = $lib.FullName
+          }
+          Write-Host "Boost root: $root"
+          Write-Host "Boost lib : $libDir"
+          "BOOST_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "BOOST_LIB_DIR=$libDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          # End By lrrry 2026-11-12
 
       - name: 安装 MySQL 8.4.13 客户端库
         shell: pwsh
@@ -219,18 +235,42 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $root = 'C:\openssl'
           $ver = $env:OPENSSL_VERSION
-          $verU = $ver.Replace('.', '_')
+          $root = 'C:\openssl'
+          # By lrrry 2026-11-12
+          # 原来装 slproweb 的 MSI + INSTALLDIR：runner 上 msiexec 返回 0，却把 OpenSSL 装回了
+          # Program Files（INSTALLDIR 被忽略），C:\openssl 里什么都没有，CMake 就报
+          # Could NOT find OpenSSL。现在：先看 C:\openssl，再看 runner 预装的位置，
+          # 都没有才下载 zip 解压，最后统一落到 C:\openssl 并校验 ssl.h。
           if (-not (Test-Path "$root\include\openssl\ssl.h")) {
-            if (Test-Path $root) { Remove-Item $root -Recurse -Force }
-            $msi = Join-Path $env:RUNNER_TEMP "openssl-$verU.msi"
-            Invoke-WebRequest -Uri "https://slproweb.com/download/Win64OpenSSL-$verU.msi" -OutFile $msi -UserAgent 'Mozilla/5.0' -MaximumRetryCount 3 -RetryIntervalSec 10
-            if ((Get-Item $msi).Length -lt 10MB) { throw 'OpenSSL MSI 体积异常' }
-            $p = Start-Process -FilePath 'msiexec.exe' -Wait -PassThru -ArgumentList @('/i', $msi, '/quiet', '/qn', '/norestart', 'REBOOT=ReallySuppress', "INSTALLDIR=$root")
-            if ($p.ExitCode -ne 0) { throw "msiexec 失败: $($p.ExitCode)" }
+            $preset = @('C:\Program Files\OpenSSL-Win64', 'C:\Program Files\OpenSSL', 'C:\Program Files (x86)\OpenSSL-Win64') |
+              Where-Object { Test-Path "$_\include\openssl\ssl.h" } | Select-Object -First 1
+            if ($preset) {
+              Write-Host "复用 runner 预装的 OpenSSL：$preset"
+              New-Item -ItemType Directory -Force -Path $root | Out-Null
+              robocopy $preset $root /E /NFL /NDL /NJH /NJS /NP | Out-Null
+              if ($LASTEXITCODE -ge 8) { throw "复制预装 OpenSSL 失败：$LASTEXITCODE" }
+            } else {
+              $zip = Join-Path $env:RUNNER_TEMP "openssl-$ver.zip"
+              $url = "https://download.firedaemon.com/FireDaemon-OpenSSL/openssl-$ver.zip"
+              Write-Host "下载 $url"
+              Invoke-WebRequest -Uri $url -OutFile $zip -UserAgent 'Mozilla/5.0' -MaximumRetryCount 3 -RetryIntervalSec 10
+              if ((Get-Item $zip).Length -lt 10MB) { throw 'OpenSSL 包体积异常' }
+              $tmp = Join-Path $env:RUNNER_TEMP 'openssl-x'
+              if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
+              Expand-Archive -Path $zip -DestinationPath $tmp -Force
+              $x64 = Get-ChildItem $tmp -Directory -Recurse -Filter 'x64' | Select-Object -First 1
+              if (-not $x64) { throw 'OpenSSL 包里没有 x64 目录' }
+              if (Test-Path $root) { Remove-Item $root -Recurse -Force }
+              New-Item -ItemType Directory -Force -Path $root | Out-Null
+              robocopy $x64.FullName $root /E /NFL /NDL /NJH /NJS /NP | Out-Null
+              if ($LASTEXITCODE -ge 8) { throw "解压 OpenSSL 失败：$LASTEXITCODE" }
+            }
           }
+          if (-not (Test-Path "$root\include\openssl\ssl.h")) { throw "OpenSSL 装好后仍找不到 $root\include\openssl\ssl.h" }
+          Write-Host "OpenSSL root: $root"
           "OPENSSL_ROOT_DIR=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          # End By lrrry 2026-11-12
 
       - name: 启用 MSVC 环境
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
@@ -246,8 +286,9 @@ jobs:
             -DCMAKE_INSTALL_PREFIX=C:/ac/env/dist `
             -DSCRIPTS=static -DMODULES=static -DAPPS_BUILD=all -DTOOLS_BUILD=none `
             -DBUILD_TESTING=OFF -DWITH_WARNINGS=OFF `
-            -DBOOST_ROOT=C:/local/boost_1_87_0 -DBoost_ROOT=C:/local/boost_1_87_0 `
-            -DBoost_INCLUDE_DIR=C:/local/boost_1_87_0 -DBoost_LIBRARY_DIR=C:/local/boost_1_87_0/lib64-msvc-14.3 `
+            -DBOOST_ROOT="$($env:BOOST_ROOT -replace '\\','/')" -DBoost_ROOT="$($env:BOOST_ROOT -replace '\\','/')" `
+            -DBoost_INCLUDE_DIR="$($env:BOOST_ROOT -replace '\\','/')" -DBoost_LIBRARY_DIR="$($env:BOOST_LIB_DIR -replace '\\','/')" `
+            -DBoost_ADDITIONAL_VERSIONS="1.87;1.87.0;1.86;1.86.0;1.85;1.85.0;1.84;1.84.0;1.83;1.83.0" `
             -DBoost_NO_BOOST_CMAKE=ON `
             -DOPENSSL_ROOT_DIR=C:/openssl -DOPENSSL_USE_STATIC_LIBS=FALSE `
             -DMYSQL_INCLUDE_DIR=C:/tools/mysql/current/include -DMYSQL_LIBRARY=C:/tools/mysql/current/lib/libmysql.lib `
@@ -308,8 +349,8 @@ jobs:
             ''
             'build_type    = ${{ inputs.build_type }}'
             'mysql_client  = 8.4.13'
-            'openssl       = 3.6.5'
-            'boost         = 1.87.0'
+            "openssl       = $env:OPENSSL_ROOT_DIR"
+            "boost         = $env:BOOST_ROOT"
           )
           $lines | Out-File -FilePath 'C:\ac\env\dist\BUILD_INFO.txt' -Encoding utf8
 
