@@ -2,9 +2,7 @@ diff --git a/src/server/coa/CoADungeonTuning.cpp b/src/server/coa/CoADungeonTuni
 index a09f0122e..3729f0d98 100644
 --- a/src/server/coa/CoADungeonTuning.cpp
 +++ b/src/server/coa/CoADungeonTuning.cpp
-@@ -180,7 +180,14 @@ public:
-         };
-         static ChatCommandTable commandTable =
+@@ -182,3 +182,10 @@ public:
          {
 -            { "mythic", mythicTable },
 +            // By lrrry 2026-11-13
@@ -16,15 +14,11 @@ index a09f0122e..3729f0d98 100644
 +            { "mythictune", mythicTable },
 +            // End By lrrry 2026-11-13
          };
-         return commandTable;
-     }
 diff --git a/src/server/coa/CoALfgStartPoint.cpp b/src/server/coa/CoALfgStartPoint.cpp
 index 04369950f..8c395df62 100644
 --- a/src/server/coa/CoALfgStartPoint.cpp
 +++ b/src/server/coa/CoALfgStartPoint.cpp
-@@ -69,7 +69,11 @@ public:
-         };
-         static ChatCommandTable commandTable =
+@@ -71,3 +71,7 @@ public:
          {
 -            { "mythic", mythicTable },
 +            // By lrrry 2026-11-13
@@ -33,5 +27,3 @@ index 04369950f..8c395df62 100644
 +            { "mythiclf", mythicTable },
 +            // End By lrrry 2026-11-13
          };
-         return commandTable;
-     }

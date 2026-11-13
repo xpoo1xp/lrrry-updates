@@ -128,9 +128,16 @@ jobs:
           for patch in "$GITHUB_WORKSPACE"/meta/ci/patches/*.patch; do
             name=$(basename "$patch")
             sed 's/\r$//' "$patch" > "$RUNNER_TEMP/patches/$name"
+            # By lrrry 2026-11-13
+            # 上游每天都有提交，补丁里的行号会漂。先按原样打，失败再放宽到「只匹配 1 行上下文」（-C1），
+            # 免得上游在相邻位置加了两行就让 0003 静默 skip、云端产物一落地就 ASSERT。
             if git apply --check "$RUNNER_TEMP/patches/$name" 2>/dev/null; then
               git apply "$RUNNER_TEMP/patches/$name"
               echo "applied: $name"
+              applied=$((applied + 1))
+            elif git apply --check -C1 "$RUNNER_TEMP/patches/$name" 2>/dev/null; then
+              git apply -C1 "$RUNNER_TEMP/patches/$name"
+              echo "applied (-C1): $name"
               applied=$((applied + 1))
             else
               echo "skip (already applied or not applicable): $name"
