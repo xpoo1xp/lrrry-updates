@@ -1,0 +1,19 @@
+diff --git a/src/server/game/Maps/Map.cpp b/src/server/game/Maps/Map.cpp
+index 89ce3a392..c36bdebcd 100644
+--- a/src/server/game/Maps/Map.cpp
++++ b/src/server/game/Maps/Map.cpp
+@@ -2354,3 +2354,13 @@ void InstanceMap::UnloadAll()
+ {
+-    ASSERT(!HavePlayers());
++    // By lrrry 2026-11-14
++    // 上游 cd772b09（fix(Core): four crashes seen under a heavy bot load）把这个断言改成了
++    // 日志 + 跳过：卸载实例时如果还有玩家在里面，原来直接 ASSERT 让世界服务器退出，
++    // 现在只记一条错误、放弃这次卸载，等玩家走了再卸。
++    // 机器人多的时候「玩家刚进副本、副本正好在卸载」就会撞上。
++    if (HavePlayers())
++    {
++        LOG_ERROR("maps", "InstanceMap::UnloadAll: map {} instance {} still has players, unload skipped", GetId(), GetInstanceId());
++        return;
++    }
++    // End By lrrry 2026-11-14
+ 
