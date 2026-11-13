@@ -424,6 +424,33 @@ jobs:
               Write-Host "已打入插件：$($_.Name)"
             }
           }
+          # By lrrry 2026-11-14
+          # SQL 也要跟着产物走。世界服务器启动时按 Source\sql-tree 自动补表结构和数据，
+          # 而 Source\sql-tree 是组装 repack 时从 core 源码复制的。云产物如果不带 SQL，
+          # 登录器「云端编译版」落地后只有新 exe + 旧 SQL，上游新加的任务/NPC/掉落都不会生效。
+          # 这里把 data\sql\updates 和各模块的 data 打进产物 Source\sql-tree，落地时合并进 repack。
+          $sqlTree = Join-Path $pkg 'Source\sql-tree'
+          $updates = 'a\data\sql\updates'
+          if (Test-Path $updates) {
+            New-Item -ItemType Directory -Force -Path (Join-Path $sqlTree 'data\sql') | Out-Null
+            Copy-Item $updates (Join-Path $sqlTree 'data\sql\updates') -Recurse -Force
+            $count = (Get-ChildItem (Join-Path $sqlTree 'data\sql\updates') -Recurse -File).Count
+            Write-Host "已打入核心 SQL updates：$count 个文件"
+          } else {
+            Write-Warning "没找到 a\data\sql\updates，产物将不含 SQL"
+          }
+          $mods = 0
+          Get-ChildItem 'a\modules' -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+            $modData = Join-Path $_.FullName 'data'
+            if (-not (Test-Path $modData)) { return }
+            $target = Join-Path $sqlTree "modules\$($_.Name)\data"
+            New-Item -ItemType Directory -Force -Path (Split-Path $target -Parent) | Out-Null
+            Copy-Item $modData $target -Recurse -Force
+            $mods++
+          }
+          Write-Host "已打入模块 SQL：$mods 个模块"
+          # End By lrrry 2026-11-14
+
           $files = @(Get-ChildItem $pkg -File | Sort-Object Name)
           ($files | ForEach-Object { '{0}  {1}' -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name }) |
             Out-File -FilePath (Join-Path $pkg 'SHA256SUMS.txt') -Encoding utf8
