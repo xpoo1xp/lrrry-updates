@@ -1,0 +1,20 @@
+diff --git a/src/server/coa/AscensionWitchDoctorCompletion.cpp b/src/server/coa/AscensionWitchDoctorCompletion.cpp
+index 8ff7a2a34..bb3b91601 100644
+--- a/src/server/coa/AscensionWitchDoctorCompletion.cpp
++++ b/src/server/coa/AscensionWitchDoctorCompletion.cpp
+@@ -42,3 +42,14 @@ void Forget(Player* player)
+     std::lock_guard<std::mutex> lock(stateMutex);
+-    states.erase(player->GetGUID());
++    // By lrrry 2026-11-13
++    // 这里原来是 states.erase(...)，会直接 free 掉 DoctorState。
++    // 但 State() 是「锁内取引用、锁外使用」：OnUnitUpdate / OnPlayerLogout 可能在不同线程，
++    // 玩家登出时 Forget 已经把对象删了，正在跑的 OnUnitUpdate 手里还拿着那个引用，
++    // state.update += diff 就写到已释放的堆块上 —— 这正是 dump 里 0xC0000374
++    // （HEAP_CORRUPTION，栈上是 witch_doctor_update::OnUnitUpdate 和 Aura::FillTargetMap）的成因，
++    // 1000 个 bot 频繁上下线时特别容易撞上。
++    // 现在只清空内容、保留槽位：引用永远指向有效对象，代价是每出现过的巫医角色留一个小结构。
++    auto found = states.find(player->GetGUID());
++    if (found != states.end() && found->second)
++        *found->second = DoctorState{};
++    // End By lrrry 2026-11-13
+ }
