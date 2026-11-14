@@ -421,7 +421,7 @@ jobs:
             'core_repo     = https://github.com/Conquest-of-AzerothCore/azerothcore-wotlk-coa'
             "core_commit   = $env:CORE_COMMIT"
             "module_commit = $env:MOD_COMMIT"
-            'modules       = mod-playerbots, mod-ah-bot-plus, mod-dungeon-clear, mod-npc-enchanter + 30 个主仓模块'
+            'modules       = mod-playerbots, mod-dungeon-clear, mod-npc-enchanter + core 自带模块'
             ''
             'build_type    = ${{ inputs.build_type }}'
             'mysql_client  = 8.4.13'
@@ -547,7 +547,7 @@ jobs:
           tag_name: ${{ env.RELEASE_ID }}
           name: ${{ env.RELEASE_ID }}
           body: |
-            云编译产物：core + CoA Bots + mod-ah-bot-plus / mod-dungeon-clear / mod-npc-enchanter + DevMenu
+            云编译产物：core + CoA Bots + mod-playerbots / mod-dungeon-clear / mod-npc-enchanter（含完整 SQL 树与汉化插件）
 
             - release_id: ${{ env.RELEASE_ID }}
             - core: ${{ env.CORE_COMMIT }}
