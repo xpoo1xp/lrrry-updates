@@ -335,16 +335,33 @@ jobs:
             -DCMAKE_RC_COMPILER=rc -DCMAKE_NINJA_FORCE_RESPONSE_FILE=ON -DCMAKE_NINJA_CMCLDEPS_RC=OFF
           if ($LASTEXITCODE -ne 0) { throw 'CMake 配置失败' }
 
-      - name: 校验 DevMenu 模块已收录
+      - name: 校验额外模块已收录
         shell: pwsh
         run: |
-          # 模块没进 modules 目录的话，这里立刻失败，不用等 90 分钟编译到链接阶段才发现
+          # By lrrry 2026-11-14
+          # 用户决定与官方整合包零偏差，DevMenu 已从 ci/modules 移除，这里改成通用校验：
+          # 只要 ci/modules 下有模块，就必须出现在 ModulesLoader.cpp 里，否则直接失败，
+          # 不用等 90 分钟编到链接阶段才发现。
           $loader = 'C:\ac\var\build\modules\gen_scriptloader\static\ModulesLoader.cpp'
           if (-not (Test-Path $loader)) { throw "没找到 ModulesLoader.cpp：$loader" }
-          if (-not (Select-String -Path $loader -Pattern 'Addmod_ilusixn_devmenuScripts' -Quiet)) {
-            throw 'DevMenu 模块没有被收录：检查 ci/modules/mod-ilusixn-devmenu/src 是否存在、有没有 _loader.cpp'
+          $extra = 'a\modules'
+          $expected = @()
+          $meta = Join-Path $env:GITHUB_WORKSPACE 'meta\ci\modules'
+          if (Test-Path $meta) {
+            $expected = @(Get-ChildItem $meta -Directory | ForEach-Object { $_.Name })
           }
-          Write-Host 'DevMenu 模块已收录（Addmod_ilusixn_devmenuScripts 在 ModulesLoader.cpp 里）'
+          if ($expected.Count -eq 0) {
+            Write-Host 'ci/modules 下没有额外模块，跳过校验（与官方模块集一致）'
+            exit 0
+          }
+          $missing = @()
+          foreach ($name in $expected) {
+            # mod-ilusixn-devmenu -> Addmod_ilusixn_devmenuScripts
+            $key = ($name -replace '^mod[-_]', '') -replace '-', '_'
+            if (-not (Select-String -Path $loader -Pattern ("Addmod_" + $key + "Scripts") -Quiet)) { $missing += $name }
+          }
+          if ($missing.Count) { throw ("这些模块没有被收录：" + ($missing -join ', ')) }
+          Write-Host ("额外模块已收录：" + ($expected -join ', '))
 
       - name: 编译并安装
         shell: pwsh
