@@ -63,14 +63,9 @@ jobs:
           path: a/modules/mod-playerbots
           fetch-depth: 1
 
-      - name: 拉取 mod-ah-bot-plus
-        uses: actions/checkout@v4
-        with:
-          repository: NathanHandley/mod-ah-bot-plus
-          ref: master
-          path: a/modules/mod-ah-bot-plus
-          fetch-depth: 1
-
+      # By lrrry 2026-11-14
+      # 不再拉 mod-ah-bot-plus：官方整合包从 3.0 起把拍卖行机器人并进了 mod-playerbots
+      # （modules/mod-playerbots/conf/mod_ahbot.conf.dist），再挂外挂会出现两套 AHBot。
       - name: 拉取 mod-dungeon-clear
         uses: actions/checkout@v4
         with:
@@ -442,19 +437,21 @@ jobs:
             }
           }
           # By lrrry 2026-11-14
-          # SQL 也要跟着产物走。世界服务器启动时按 Source\sql-tree 自动补表结构和数据，
-          # 而 Source\sql-tree 是组装 repack 时从 core 源码复制的。云产物如果不带 SQL，
-          # 登录器「云端编译版」落地后只有新 exe + 旧 SQL，上游新加的任务/NPC/掉落都不会生效。
-          # 这里把 data\sql\updates 和各模块的 data 打进产物 Source\sql-tree，落地时合并进 repack。
+          # SQL 要跟着产物走，而且要「完整」。
+          # 世界服务器启动时按 Source\sql-tree 自动补表结构和数据；repack 里这份是从 core 源码复制的。
+          # 云产物只带 updates 时，从很老的版本升级会缺 archive 里被合并掉的历史脚本，
+          # DBUpdater 的 checksum 校验就对不上。所以这里把整个 a\data\sql 打进去
+          # （base / updates / archive / create / custom），各模块的 data 也一并带上。
           $sqlTree = Join-Path $pkg 'Source\sql-tree'
-          $updates = 'a\data\sql\updates'
-          if (Test-Path $updates) {
-            New-Item -ItemType Directory -Force -Path (Join-Path $sqlTree 'data\sql') | Out-Null
-            Copy-Item $updates (Join-Path $sqlTree 'data\sql\updates') -Recurse -Force
-            $count = (Get-ChildItem (Join-Path $sqlTree 'data\sql\updates') -Recurse -File).Count
-            Write-Host "已打入核心 SQL updates：$count 个文件"
+          $dataSql = 'a\data\sql'
+          if (Test-Path $dataSql) {
+            New-Item -ItemType Directory -Force -Path (Join-Path $sqlTree 'data') | Out-Null
+            Copy-Item $dataSql (Join-Path $sqlTree 'data\sql') -Recurse -Force
+            $count = (Get-ChildItem (Join-Path $sqlTree 'data\sql') -Recurse -File).Count
+            $size = [math]::Round(((Get-ChildItem (Join-Path $sqlTree 'data\sql') -Recurse -File | Measure-Object Length -Sum).Sum / 1MB), 1)
+            Write-Host "已打入完整核心 SQL 树：$count 个文件 / $size MB"
           } else {
-            Write-Warning "没找到 a\data\sql\updates，产物将不含 SQL"
+            Write-Warning "没找到 a\data\sql，产物将不含 SQL"
           }
           $mods = 0
           Get-ChildItem 'a\modules' -Directory -ErrorAction SilentlyContinue | ForEach-Object {
@@ -466,6 +463,32 @@ jobs:
             $mods++
           }
           Write-Host "已打入模块 SQL：$mods 个模块"
+          # End By lrrry 2026-11-14
+
+          # By lrrry 2026-11-14
+          # 升级文件：把这次使用的 core 提交、模块提交、以及相对上一个 release 的提交清单写进产物。
+          # 登录器落地时会把它放进 repack 的 BUILD_INFO.txt / RELEASE_NOTES.md，玩家能看到改了什么。
+          $notes = Join-Path $pkg 'RELEASE_NOTES.md'
+          $coreSha = (git -C a rev-parse HEAD).Trim()
+          $pbSha = (git -C 'a/modules/mod-playerbots' rev-parse HEAD).Trim()
+          $dcSha = (git -C 'a/modules/mod-dungeon-clear' rev-parse HEAD).Trim()
+          $neSha = (git -C 'a/modules/mod-npc-enchanter' rev-parse HEAD).Trim()
+          $lines = @(
+            "# $env:RELEASE_ID",
+            "",
+            "核心提交：$coreSha",
+            "机器人模块：$pbSha",
+            "副本清理模块：$dcSha",
+            "附魔师模块：$neSha",
+            "",
+            "## 核心变更",
+            ""
+          )
+          $lines += (git -C a log -20 --pretty=format:'- %s (%h)' | ForEach-Object { $_ })
+          $lines += @("", "## 机器人模块变更", "")
+          $lines += (git -C 'a/modules/mod-playerbots' log -10 --pretty=format:'- %s (%h)' | ForEach-Object { $_ })
+          $lines | Out-File -FilePath $notes -Encoding utf8
+          Write-Host "已写入升级文件 RELEASE_NOTES.md"
           # End By lrrry 2026-11-14
 
           $files = @(Get-ChildItem $pkg -File | Sort-Object Name)
