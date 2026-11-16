@@ -97,8 +97,16 @@ for (const name of fs.readdirSync(src)) {
     lines.push(`\t\t${key} = "${(zh || value).replace(/"/g, '\\"')}",`);
   }
 
-  // 在 en 块的结束大括号后插入 zh 块
-  const insertAt = en.end + 1;
+  // 在 en 块的结束大括号后插入 zh 块。
+  // 注意：en 块自身以 "}" 结束，它后面的逗号属于 en（分隔 en 与 fr）。
+  // 旧写法直接插在 "}" 之后，会得到 "}\n\tzh = {...},,"，en 少逗号、zh 多逗号，
+  // 整个 STRINGS 表在 Lua 里语法错误，插件加载失败。
+  // 正确做法：先确保 en 块后有逗号，再把 zh 块插到这个逗号之后。
+  let insertAt = en.end + 1;
+  if (text[insertAt] !== ',') {
+    text = text.slice(0, insertAt) + ',' + text.slice(insertAt);
+  }
+  insertAt += 1; // 跳过 en 与 zh 之间的逗号
   const block = `\n\tzh = {\n${lines.join('\n')}\n\t},`;
   text = text.slice(0, insertAt) + block + text.slice(insertAt);
   fs.writeFileSync(file, text, 'utf8');
@@ -109,15 +117,44 @@ for (const name of fs.readdirSync(src)) {
 const entryFile = path.join(src, 'SquidBotsLite.lua');
 if (fs.existsSync(entryFile)) {
   let text = fs.readFileSync(entryFile, 'utf8');
+  let touched = false;
   const before = 'lang = (GetLocale() == "frFR") and "fr" or "en"';
   const after = 'lang = (GetLocale() == "frFR") and "fr" or ((GetLocale() == "zhCN" or GetLocale() == "zhTW") and "zh" or "en")';
   if (text.includes(before)) {
     text = text.replace(before, after);
-    fs.writeFileSync(entryFile, text, 'utf8');
+    touched = true;
     report.push('语言判断已支持 zhCN / zhTW');
   } else if (text.includes('and "zh"')) {
     report.push('语言判断已经是中文版本');
   }
+  // 斜杠命令：SetLanguage 只认 fr/en 时，/sbl lang zh 会被当成非法值重置回自动判断
+  const guardBefore = 'if lang ~= "fr" and lang ~= "en" then';
+  if (text.includes(guardBefore)) {
+    text = text.replace(guardBefore, 'if lang ~= "fr" and lang ~= "en" and lang ~= "zh" then');
+    touched = true;
+    report.push('/sbl lang zh 已可用');
+  }
+  // 老版本对 zhCN 客户端存的是 "en"（那时还没有 zh 表），升级后仍是英文。
+  // 首次加载时迁到中文一次，之后尊重玩家用 /sbl lang 手动选的值。
+  if (!text.includes('langZhMigrated')) {
+    const anchor = 'SetLanguage(SquidBotsLiteDB.lang)';
+    const migration = [
+      '-- Older versions saved "en" for zhCN clients (no zh table then): switch them to Chinese once.',
+      '\t\tif SquidBotsLiteDB.langZhMigrated ~= 1 then',
+      '\t\t\tSquidBotsLiteDB.langZhMigrated = 1',
+      '\t\t\tif (GetLocale() == "zhCN" or GetLocale() == "zhTW") and (SquidBotsLiteDB.lang == nil or SquidBotsLiteDB.lang == "en") then',
+      '\t\t\t\tSquidBotsLiteDB.lang = "zh"',
+      '\t\t\tend',
+      '\t\tend',
+      '\t\t' + anchor,
+    ].join('\n');
+    if (text.includes(anchor)) {
+      text = text.replace(anchor, migration);
+      touched = true;
+      report.push('zhCN 客户端首次加载自动切中文');
+    }
+  }
+  if (touched) fs.writeFileSync(entryFile, text, 'utf8');
 }
 
 for (const line of report) console.log(`[汉化] ${line}`);

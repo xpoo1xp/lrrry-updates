@@ -438,25 +438,37 @@ jobs:
           New-Item -ItemType Directory -Force -Path $pkg | Out-Null
           Copy-Item 'C:\ac\env\dist\*' $pkg -Recurse -Force
           Remove-Item (Join-Path $pkg 'Logs') -Recurse -Force -ErrorAction SilentlyContinue
-          # By lrrry 2026-11-14
-          # SquidBotsLite 汉化后一起打进产物：落地到 CoA-Bots\Client\SquidBotsLite，
-          # coa_update.py 会把它复制到客户端 Interface\AddOns，玩家进游戏就是中文。
-          # 插件自带多语言表，汉化只补 STRINGS.zh 并让 lang 认识 zhCN，不动任何业务逻辑。
+          # By lrrry 2026-11-16
+          # SquidBotsLite 汉化后一起打进产物，两份布局都放：
+          #   CoA-Bots\Client\SquidBotsLite            更新工具 install_addon 读这里
+          #   CoA-Bots\Client\Interface\AddOns\<插件>  启动器 addon-sync 读这里
+          # 旧版汉化脚本会在 en/zh 表之间写错逗号（"}\n zh={...},,"），整个插件语法错误、
+          # 游戏里加载失败；这里跑 verify-addon.mjs 硬性校验，有问题直接让编译失败。
           $addonSrc = 'a\addons\squidbots-addon\SquidBotsLite'
           if (Test-Path $addonSrc) {
-            $cnTool = Join-Path $env:GITHUB_WORKSPACE 'meta\ci\tools\lrrry-addon-cn.mjs'
-            $cnDict = Join-Path $env:GITHUB_WORKSPACE 'meta\ci\tools\lrrry-addon-zh.json'
+            $tools = Join-Path $env:GITHUB_WORKSPACE 'meta\ci\tools'
+            $cnTool = Join-Path $tools 'lrrry-addon-cn.mjs'
+            $cnDict = Join-Path $tools 'lrrry-addon-zh.json'
+            $verify = Join-Path $tools 'verify-addon.mjs'
+            foreach ($f in @($cnTool, $cnDict, $verify)) {
+              if (-not (Test-Path $f)) { throw "ci/tools 缺少 $(Split-Path $f -Leaf)：插件汉化不能跑" }
+            }
             node $cnTool --src $addonSrc --dict $cnDict
             if ($LASTEXITCODE -ne 0) { throw '插件汉化失败' }
+            node $verify $addonSrc
+            if ($LASTEXITCODE -ne 0) { throw '插件校验失败：汉化结果有语法错误，不能进产物' }
             $clientRoot = Join-Path $pkg 'CoA-Bots\Client'
-            New-Item -ItemType Directory -Force -Path $clientRoot | Out-Null
-            Copy-Item $addonSrc (Join-Path $clientRoot 'SquidBotsLite') -Recurse -Force
+            foreach ($dst in @((Join-Path $clientRoot 'SquidBotsLite'), (Join-Path $clientRoot 'Interface\AddOns\SquidBotsLite'))) {
+              New-Item -ItemType Directory -Force -Path (Split-Path $dst -Parent) | Out-Null
+              if (Test-Path $dst) { Remove-Item $dst -Recurse -Force }
+              Copy-Item $addonSrc $dst -Recurse -Force
+            }
             $toc = Get-Content (Join-Path $clientRoot 'SquidBotsLite\SquidBotsLite.toc') -ErrorAction SilentlyContinue
-            Write-Host "已打入汉化后的 SquidBotsLite（$($toc | Where-Object { $_ -match '^## Version' })）"
+            Write-Host "已打入汉化后的 SquidBotsLite（$($toc | Where-Object { $_ -match '^## Version' })），两份布局"
           } else {
-            Write-Warning "没找到插件源码 a\addons\squidbots-addon\SquidBotsLite"
+            throw '没有插件源码 a\addons\squidbots-addon\SquidBotsLite：检查「拉取 SquidBotsLite 插件」那步'
           }
-          # End By lrrry 2026-11-14
+          # End By lrrry 2026-11-16
           # By lrrry 2026-11-14
           # SQL 要跟着产物走，而且要「完整」。
           # 世界服务器启动时按 Source\sql-tree 自动补表结构和数据；repack 里这份是从 core 源码复制的。
