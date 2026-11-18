@@ -74,10 +74,13 @@ jobs:
           path: a/modules/mod-dungeon-clear
           fetch-depth: 1
 
+      # By lrrry 2026-11-18: 换成 Zyth45 的 fork。官方那个 2026-03 就停更了，
+      # 这份是官方 fork + SquidBots 适配（tier 分级、金币价格、职业限制），2026-11 还在维护。
+      # 键名与官方版不同：EnchanterNpc.*（没有 EC.Pn 台词），配置见 ci 里的 npc_enchanter.conf。
       - name: 拉取 mod-npc-enchanter
         uses: actions/checkout@v4
         with:
-          repository: azerothcore/mod-npc-enchanter
+          repository: Zyth45/mod-npc-enchanter
           ref: master
           path: a/modules/mod-npc-enchanter
           fetch-depth: 1

@@ -94,7 +94,12 @@ for (const name of fs.readdirSync(src)) {
   for (const [key, value] of pairs) {
     const zh = dict[value];
     if (zh) translated += 1;
-    lines.push(`\t\t${key} = "${(zh || value).replace(/"/g, '\\"')}",`);
+    // By lrrry 2026-11-18: value 是从源码里抓的「原始转义文本」，里面 \" 已经是两个字符。
+    // 再对它 replace 一次会把 \" 变成 \\"，Lua 里这就是字符串提前结束 + 孤立反斜杠，整个表语法错误。
+    // 有中文才需要转义引号；没有就原样照抄，什么都不动。
+    lines.push(zh
+      ? `\t\t${key} = "${zh.replace(/"/g, '\\"')}",`
+      : `\t\t${key} = "${value}",`);
   }
 
   // 在 en 块的结束大括号后插入 zh 块。
