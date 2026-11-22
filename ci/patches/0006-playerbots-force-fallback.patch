@@ -1,0 +1,18 @@
+diff --git a/modules/mod-playerbots/mod-playerbots.cmake b/modules/mod-playerbots/mod-playerbots.cmake
+--- a/modules/mod-playerbots/mod-playerbots.cmake
++++ b/modules/mod-playerbots/mod-playerbots.cmake
+@@ -38,8 +38,14 @@
+     target_compile_options(modules-playerbots
+       PRIVATE
+         -DMOD_PLAYERBOTS
+         $<TARGET_PROPERTY:modules,COMPILE_OPTIONS>)
++    # By lrrry 2026-11-22
++    # 公共 core 的 AscensionIncarnation.h 与模块的探测同名，却没有 IsAscensionMaleOnlyRace
++    # （core c9be83a58f 的 Venomancer 提交引入），C3861 编译失败。用模块自带的逃生开关
++    # 强制走 CoaBotRaceRules.h 列表；上游补齐该函数后删除本补丁。
++    # End By lrrry 2026-11-22
+     target_compile_definitions(modules-playerbots
+       PRIVATE
++        COA_BOT_RACES_FORCE_FALLBACK
+         $<TARGET_PROPERTY:modules,COMPILE_DEFINITIONS>)
+     set_target_properties(modules-playerbots PROPERTIES FOLDER "modules")

@@ -337,9 +337,12 @@ jobs:
           # src/server/coa/AscensionIncarnation.h，但里面只有 HasActiveFormIncarnation，
           # 没有 mod-playerbots 探测要用的 IsAscensionMaleOnlyRace。模块按文件名
           # __has_include 探测，同名即中招，C3861 编译失败（3.1.4/3.1.7 都中）。
-          # 模块自带开关 COA_BOT_RACES_FORCE_FALLBACK 正是为此设计：强制走模块
-          # 自带的男性模型列表（CoaBotRaceRules.h）+ 服务器配置行。等上游把
-          # IsAscensionMaleOnlyRace 真正补进 core（或模块改成内容级探测）后移除本行。
+          # 修复在 ci/patches/0006-playerbots-force-fallback.patch：给 modules-playerbots
+          # 目标加 COA_BOT_RACES_FORCE_FALLBACK 编译定义（模块作者设计的逃生开关，
+          # 强制走自带 CoaBotRaceRules.h 列表）。注意不能用 cmake -D<名字>=1——那只是
+          # CMake 缓存变量，模块的 #if defined 看不到（第一次修复就栽在这里）；
+          # 也不能直接覆盖 CMAKE_CXX_FLAGS（会丢掉 MSVC 默认的 /DWIN32 /D_WINDOWS /EHsc）。
+          # 上游把 IsAscensionMaleOnlyRace 补进 core（或模块改成内容级探测）后删掉该补丁。
           # End By lrrry 2026-11-22
           cmake -S C:\ac -B C:\ac\var\build -G Ninja `
             -DCMAKE_BUILD_TYPE=${{ inputs.build_type }} `
@@ -352,7 +355,6 @@ jobs:
             -DBoost_NO_BOOST_CMAKE=ON `
             -DOPENSSL_ROOT_DIR=C:/openssl -DOPENSSL_USE_STATIC_LIBS=FALSE `
             -DMYSQL_INCLUDE_DIR=C:/tools/mysql/current/include -DMYSQL_LIBRARY=C:/tools/mysql/current/lib/libmysql.lib `
-            -DCOA_BOT_RACES_FORCE_FALLBACK=1 `
             -DCMAKE_RC_COMPILER=rc -DCMAKE_NINJA_FORCE_RESPONSE_FILE=ON -DCMAKE_NINJA_CMCLDEPS_RC=OFF
           if ($LASTEXITCODE -ne 0) { throw 'CMake 配置失败' }
 
