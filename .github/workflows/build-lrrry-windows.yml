@@ -472,6 +472,21 @@ jobs:
             throw '没有插件源码 a\addons\squidbots-addon\SquidBotsLite：检查「拉取 SquidBotsLite 插件」那步'
           }
           # End By lrrry 2026-11-16
+          # By lrrry 2026-11-22
+          # BugReport\relay.py 必须进产物：manage.py relay-worker 用 importlib 加载它，
+          # 缺了它 coa_bots start-world 在 wait_relay 上等 6 分钟才报
+          # 「Bug-report relay is not ready」，期间握着 manage 控制锁，
+          # 把同期的 start-auth 挤掉，玩家的登录器就一直显示 Authserver 没起来。
+          # 这文件在 core 源码 apps\coa-bugreport 里，跟着产物落地到 repack\BugReport。
+          $relayDst = Join-Path $pkg 'BugReport\relay.py'
+          if (Test-Path 'a\apps\coa-bugreport\relay.py') {
+            New-Item -ItemType Directory -Force -Path (Join-Path $pkg 'BugReport') | Out-Null
+            Copy-Item 'a\apps\coa-bugreport\relay.py' $relayDst -Force
+            Write-Host "已打入 BugReport\relay.py（$([math]::Round((Get-Item $relayDst).Length/1KB,1)) KB）"
+          } else {
+            Write-Warning '没找到 a\apps\coa-bugreport\relay.py，这版产物落地后 bug 上报中继会缺失'
+          }
+          # End By lrrry 2026-11-22
           # By lrrry 2026-11-14
           # SQL 要跟着产物走，而且要「完整」。
           # 世界服务器启动时按 Source\sql-tree 自动补表结构和数据；repack 里这份是从 core 源码复制的。
